@@ -8,7 +8,7 @@ Writes to HackerOne are impossible by construction: GET only, `https://api.hacke
 
 1. **Raw-path mode (unchanged, used by existing finder agents and the weekday routine).** If the first non-flag argument starts with `/`, the whole invocation is handled exactly as before subcommands existed:
    `h1ro [--dry-run] /v1/hackers/... [key=value ...]` - raw pretty JSON on stdout, `HTTP <code>: <body>` on stderr + exit 1 for 4xx/5xx, `refused: ...` + exit 1 for local refusals. Only `--dry-run` and `-h/--help` are flags here; anything else dash-leading is refused.
-2. **Subcommand mode.** Otherwise the first token is a command (`programs`, `reports`, `payments`, `hacktivity`, `me`, `raw`, `help`). Subcommands are only *builders* of an allowed `/v1/hackers` GET path + params; the result goes through the exact same `validate_path` / `validate_params` / `build_request` / `perform` as raw-path mode. The validator (not the builder) enforces the lock, and tests prove it refuses hostile handles/ids by itself.
+2. **Subcommand mode.** Otherwise the first token is a command (`programs`, `reports`, `payments`, `hacktivity`, `intents`, `raw`, `help`). Subcommands are only *builders* of an allowed `/v1/hackers` GET path + params; the result goes through the exact same `validate_path` / `validate_params` / `build_request` / `perform` as raw-path mode. The validator (not the builder) enforces the lock, and tests prove it refuses hostile handles/ids by itself.
 
 ## Command tree
 
@@ -34,7 +34,6 @@ h1ro intents
   intents attachments <id> [--fields a,b]           GET /v1/hackers/report_intents/<id>/attachments
 h1ro hacktivity [--query LUCENE] [--sort FIELD] [list flags]
                                                     GET /v1/hackers/hacktivity
-h1ro me                                             GET /v1/hackers/me   (may 401 for this token type)
 h1ro raw </v1/hackers/...> [key=value ...]          any allowed GET; pretty JSON; twin of raw-path mode
 ```
 
@@ -57,10 +56,12 @@ Flags may appear anywhere; `--limit=2` and `--limit 2` both work; a flag not val
   - `programs weaknesses`: `id, name, external_id`
   - `reports list`: `id, state, created_at, bounty_awarded_at, title, program` (`program` is the included program handle)
   - `intents list`: `id, state, title`
-  - `intents attachments`: `id, file_name, content_type, file_size, created_at` (`expiring_url` is omitted here; it is in `--json` and is not requested)
+  - `intents attachments`: `id, file_name, content_type, file_size, created_at, expiring_url`
   - `hacktivity`: `id, submitted_at, disclosed, title, severity_rating, total_awarded_amount, substate, program`
-  - `programs exclusions`, `payments earnings`, `payments payouts`: auto = `id` + up to 6 scalar attributes of the first record (these lists are often empty)
-- **Single objects** (`programs get`, `reports get`, `intents get`, `me`, `payments balance`): `key<TAB>value` lines - `id`, `type`, then every attribute in API order (long values truncated with the marker). `reports get` then prints the activities already embedded in that response (`created_at`, `type`, `actor`, `message`). Other relationships are not shown in compact mode; the footer names them (`relationships omitted: a,b`) and `--json` has everything. Attachment file hosts are never requested.
+  - `programs exclusions`: `id, category, details, created_at, updated_at`
+  - `payments earnings`: `id, type, amount, created_at, program`
+  - `payments payouts`: `amount, paid_out_at, status, payout_provider, reference` (flat records, no id)
+- **Single objects** (`programs get`, `reports get`, `intents get`, `payments balance`): `key<TAB>value` lines - `id`, `type`, then every attribute in API order (long values truncated with the marker). `reports get` then prints the activities already embedded in that response (`created_at`, `type`, `actor`, `message`) and an attachments table (`id`, `file_name`, `content_type`, `file_size`, `expiring_url`) when any are present, including attachments nested on activities. Other relationships are named in the stderr footer, and `--json` has everything. `expiring_url` is printed and never requested. `/v1/hackers/me` is not a command: it is not in the Hacker API catalog and returns 401 for a Hacker API token. The path stays reachable with `h1ro raw /v1/hackers/me`. Liveness check: `programs list --limit 1`.
 - **Footer (stderr) for lists**, e.g.
   `# programs scopes: 3 rows; page 1 of 33 (size 3); next: h1ro programs scopes dyson --limit 3 --page 2`
   Page/size/last come from the API's `links` (self/next/last) or the flags you passed. If the size is not reported it says `size: API default, not reported` instead of guessing; if the API sends no `last` link there is no "of N"; with no `next` link it says `end of results`. It also reports truncated-cell counts (`N cell(s) truncated at M chars; full: --json, or --max-chars 0`) and `--bounty-only` counts (`K of N rows kept ...`). The `next:` command preserves `--bounty-only`, `--fields`, `--max-chars`, `--json`. `raw` footers give `next: h1ro raw <path> 'page[size]=..' 'page[number]=..'`.
@@ -106,7 +107,7 @@ h1ro programs list --dry-run --limit 2
 
 - A subcommand only formats a path from one argument (`handle` or numeric `id`) and documented read params (`--limit`/`--page`, hacktivity `--query`/`--sort`, scope `--since-id`/`--created-after`/`--updated-after`). `intents` sends no query string. The builder also rejects arguments that are not a single `[A-Za-z0-9_.~-]` segment (report and intent ids must be digits, so `1/submit` cannot be built), but this is a second layer: the **validator** independently refuses `../invitations`, `x/submit`, `%2e%2e`, `a b`, `a?b`, URLs, backslashes, control characters, denylisted words, the submit path, and any path under `report_intents/<id>/attachments/<id>`, and `build_request` re-validates and re-checks the host/prefix lock. Tests cover both layers. `--query` is one parameter: `&` and `=` inside it are percent-encoded and cannot add another parameter. `--sort` accepts only the documented hacktivity fields.
 - Subcommand flags cannot influence verb, host, redirects or headers; `--fields`/`--max-chars`/`--bounty-only` only affect local rendering. `cmd.rs` and `render.rs` contain no network, env, filesystem or process access (source-scan test).
-- `me` is kept as requested; with this Hacker API token it returns `error: HTTP 401: ...` (use `programs list --limit 1` as the liveness check).
+- `/v1/hackers/me` is not a subcommand. A Hacker API token gets 401 there, and the catalog does not list it. `h1ro raw /v1/hackers/me` still performs that GET if you ask for it.
 
 ## Differences from the Python version
 

@@ -178,6 +178,41 @@ pub fn activities_table(obj: &Value, max: usize) -> Option<(String, usize, usize
     Some((out, trunc, rows.len()))
 }
 
+fn relation_rows<'a>(node: &'a Value) -> Vec<&'a Value> {
+    match node.get("data") {
+        Some(Value::Array(a)) => a.iter().collect(),
+        Some(o @ Value::Object(_)) => vec![o],
+        _ => Vec::new(),
+    }
+}
+
+/// Attachment metadata already embedded on a report: the report's own
+/// attachments, plus any nested on its activities. `None` when there are none.
+/// The file host in `expiring_url` is not contacted.
+pub fn attachments_table(obj: &Value, max: usize) -> Option<(String, usize, usize)> {
+    let rel = obj.get("relationships")?;
+    let mut rows: Vec<&Value> = Vec::new();
+    if let Some(atts) = rel.get("attachments") {
+        rows.extend(relation_rows(atts));
+    }
+    if let Some(acts) = rel.get("activities") {
+        for act in relation_rows(acts) {
+            if let Some(nested) = act.get("relationships").and_then(|r| r.get("attachments")) {
+                rows.extend(relation_rows(nested));
+            }
+        }
+    }
+    if rows.is_empty() {
+        return None;
+    }
+    let cols = ["id", "file_name", "content_type", "file_size", "expiring_url"]
+        .into_iter()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    let (text, trunc) = table(&rows, &cols, max);
+    Some((text, trunc, rows.len()))
+}
+
 /// `key<TAB>value` lines for one object. Returns (text, truncated_count, omitted relationship names).
 pub fn kv(obj: &Value, max: usize) -> (String, usize, Vec<String>) {
     let mut out = String::new();

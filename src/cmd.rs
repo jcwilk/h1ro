@@ -21,7 +21,6 @@ pub enum Kind {
     ProgramsExclusions,
     ReportsList,
     ReportsGet,
-    Me,
     Hacktivity,
     PaymentsBalance,
     PaymentsEarnings,
@@ -126,8 +125,8 @@ pub const SPECS: &[Spec] = &[
         summary: "a program's reward-excluded scope categories",
         usage: "h1ro programs exclusions <handle> [--limit N] [--page N] [--fields a,b] [--max-chars N] [--json] [--dry-run]",
         endpoint: "GET /v1/hackers/programs/<handle>/scope_exclusions[?page[size]=N&page[number]=N]",
-        columns: "auto: id + up to 6 scalar attributes of the first record (list may be empty)",
-        notes: "",
+        columns: "id, category, details, created_at, updated_at",
+        notes: "Header is fixed, including when the page is empty.",
         example: "h1ro programs exclusions dyson",
         flags: LIST_FLAGS,
     },
@@ -148,20 +147,9 @@ pub const SPECS: &[Spec] = &[
         summary: "one report by numeric id (body truncated)",
         usage: "h1ro reports get <id> [--max-chars N] [--json] [--dry-run]",
         endpoint: "GET /v1/hackers/reports/<id>",
-        columns: "key<TAB>value lines: id, type, then every attribute in API order; then an activities table (created_at, type, actor, message) when the report includes one. Other relationships are named in the stderr footer; full data via --json",
-        notes: "<id> must be digits only. Activities are the ones already embedded in this GET. Attachment files and expiring_url values are not requested.",
+        columns: "key<TAB>value lines: id, type, then every attribute in API order; then an activities table (created_at, type, actor, message) and an attachments table (id, file_name, content_type, file_size, expiring_url) when the report includes them",
+        notes: "<id> must be digits only. Activities and attachment metadata are the ones already embedded in this GET. expiring_url is printed and is never requested.",
         example: "h1ro reports get 4149145 --max-chars 0",
-        flags: GET_FLAGS,
-    },
-    Spec {
-        name: "me",
-        kind: Kind::Me,
-        summary: "GET /v1/hackers/me (may 401 for this token type)",
-        usage: "h1ro me [--max-chars N] [--json] [--dry-run]",
-        endpoint: "GET /v1/hackers/me",
-        columns: "key<TAB>value lines",
-        notes: "NOTE: this may 401 (it has returned \"not a Customer API token\" for the Hacker API token); the error is surfaced as `error: HTTP 401: ...`. Use `programs list` as the liveness check instead.",
-        example: "h1ro me --json",
         flags: GET_FLAGS,
     },
     Spec {
@@ -192,8 +180,8 @@ pub const SPECS: &[Spec] = &[
         summary: "your earnings",
         usage: "h1ro payments earnings [--limit N] [--page N] [--fields a,b] [--max-chars N] [--json] [--dry-run]",
         endpoint: "GET /v1/hackers/payments/earnings[?page[size]=N&page[number]=N]",
-        columns: "auto: id + up to 6 scalar attributes of the first record (list may be empty)",
-        notes: "",
+        columns: "id, type, amount, created_at, program",
+        notes: "program is the included program handle. Header is fixed, including when the page is empty.",
         example: "h1ro payments earnings",
         flags: LIST_FLAGS,
     },
@@ -203,8 +191,8 @@ pub const SPECS: &[Spec] = &[
         summary: "your payouts",
         usage: "h1ro payments payouts [--limit N] [--page N] [--fields a,b] [--max-chars N] [--json] [--dry-run]",
         endpoint: "GET /v1/hackers/payments/payouts[?page[size]=N&page[number]=N]",
-        columns: "auto: id + up to 6 scalar attributes of the first record (list may be empty)",
-        notes: "",
+        columns: "amount, paid_out_at, status, payout_provider, reference",
+        notes: "Payout records are flat objects (no id). Header is fixed, including when the page is empty.",
         example: "h1ro payments payouts",
         flags: LIST_FLAGS,
     },
@@ -236,8 +224,8 @@ pub const SPECS: &[Spec] = &[
         summary: "attachment metadata on one report draft",
         usage: "h1ro intents attachments <id> [--fields a,b] [--max-chars N] [--json] [--dry-run]",
         endpoint: "GET /v1/hackers/report_intents/<id>/attachments",
-        columns: "id, file_name, content_type, file_size, created_at",
-        notes: "Collection GET only. The catalog documents no query parameters, so this command sends none. A further attachment id is the DELETE url and is refused locally. expiring_url stays in --json only and is never requested.",
+        columns: "id, file_name, content_type, file_size, created_at, expiring_url",
+        notes: "Collection GET only. The catalog documents no query parameters, so this command sends none. A further attachment id is the DELETE url and is refused locally. expiring_url is printed and is never requested.",
         example: "h1ro intents attachments 23",
         flags: READ_LIST_FLAGS,
     },
@@ -270,7 +258,6 @@ commands:
   payments    balance|earnings|payouts                your payments
   intents     list|get|attachments                    your report drafts and their attachment metadata
   hacktivity                                          public hacktivity (--query, --sort)
-  me                                                  GET /v1/hackers/me (may 401 for this token)
   raw <path> [k=v ...]                                any allowed GET under /v1/hackers
   help [command]                                      this overview, or help for a command
 global flags: --json (full pretty JSON)  --dry-run (print the GET, no network)  --help
@@ -572,7 +559,6 @@ pub fn path_for(kind: Kind, arg: &str) -> String {
         Kind::ProgramsExclusions => format!("/v1/hackers/programs/{arg}/scope_exclusions"),
         Kind::ReportsList => "/v1/hackers/me/reports".into(),
         Kind::ReportsGet => format!("/v1/hackers/reports/{arg}"),
-        Kind::Me => "/v1/hackers/me".into(),
         Kind::Hacktivity => "/v1/hackers/hacktivity".into(),
         Kind::PaymentsBalance => "/v1/hackers/payments/balance".into(),
         Kind::PaymentsEarnings => "/v1/hackers/payments/earnings".into(),
@@ -771,6 +757,7 @@ fn default_columns(kind: Kind) -> Option<&'static [&'static str]> {
             "max_severity",
         ]),
         Kind::ProgramsWeaknesses => Some(&["id", "name", "external_id"]),
+        Kind::ProgramsExclusions => Some(&["id", "category", "details", "created_at", "updated_at"]),
         Kind::ReportsList => Some(&["id", "state", "created_at", "bounty_awarded_at", "title", "program"]),
         Kind::Hacktivity => Some(&[
             "id",
@@ -782,8 +769,10 @@ fn default_columns(kind: Kind) -> Option<&'static [&'static str]> {
             "substate",
             "program",
         ]),
+        Kind::PaymentsEarnings => Some(&["id", "type", "amount", "created_at", "program"]),
+        Kind::PaymentsPayouts => Some(&["amount", "paid_out_at", "status", "payout_provider", "reference"]),
         Kind::IntentsList => Some(&["id", "state", "title"]),
-        Kind::IntentsAttachments => Some(&["id", "file_name", "content_type", "file_size", "created_at"]),
+        Kind::IntentsAttachments => Some(&["id", "file_name", "content_type", "file_size", "created_at", "expiring_url"]),
         _ => None,
     }
 }
@@ -941,9 +930,6 @@ pub fn execute(
             Ok(Outcome::Success(t)) => t,
             Ok(Outcome::HttpError(m)) => {
                 err.push_str(&format!("error: {m}\n"));
-                if p.kind == Kind::Me {
-                    err.push_str("# note: /v1/hackers/me may 401 for Hacker API tokens; try `h1ro programs list --limit 1`\n");
-                }
                 return 1;
             }
             Err(e) => {
@@ -1035,6 +1021,8 @@ fn render(p: &RequestPlan, v: &Value, pretty: &str, out: &mut String, err: &mut 
     let (text, mut trunc, mut omitted) = kv(obj, max);
     let mut activities = String::new();
     let mut activity_count = None;
+    let mut attachments = String::new();
+    let mut attachment_count = None;
     if p.kind == Kind::ReportsGet {
         if let Some((table, ntrunc, n)) = activities_table(obj, max) {
             trunc += ntrunc;
@@ -1042,8 +1030,14 @@ fn render(p: &RequestPlan, v: &Value, pretty: &str, out: &mut String, err: &mut 
             activities = table;
             omitted.retain(|name| name != "activities");
         }
+        if let Some((table, ntrunc, n)) = attachments_table(obj, max) {
+            trunc += ntrunc;
+            attachment_count = Some(n);
+            attachments = table;
+            omitted.retain(|name| name != "attachments");
+        }
     }
-    if text.is_empty() && activities.is_empty() {
+    if text.is_empty() && activities.is_empty() && attachments.is_empty() {
         out.push_str(pretty);
         out.push('\n');
         return 0;
@@ -1055,12 +1049,21 @@ fn render(p: &RequestPlan, v: &Value, pretty: &str, out: &mut String, err: &mut 
         }
         out.push_str(&activities);
     }
+    if !attachments.is_empty() {
+        if !text.is_empty() || !activities.is_empty() {
+            out.push('\n');
+        }
+        out.push_str(&attachments);
+    }
     let mut notes: Vec<String> = Vec::new();
     if trunc > 0 {
         notes.push(format!("{trunc} value(s) truncated at {max} chars (--max-chars 0 or --json for full)"));
     }
     if let Some(n) = activity_count {
-        notes.push(format!("activities: {n} (attachment files are not downloaded)"));
+        notes.push(format!("activities: {n}"));
+    }
+    if let Some(n) = attachment_count {
+        notes.push(format!("attachments: {n} (not downloaded)"));
     }
     if !omitted.is_empty() {
         notes.push(format!("relationships omitted: {} (--json for full)", omitted.join(",")));

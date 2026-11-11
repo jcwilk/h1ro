@@ -67,7 +67,7 @@ fn every_subcommand_maps_to_expected_get() {
         (vec!["programs", "exclusions", "dyson"], format!("{h}/programs/dyson/scope_exclusions")),
         (vec!["reports", "list", "--page", "2"], format!("{h}/me/reports?page%5Bnumber%5D=2")),
         (vec!["reports", "get", "4149145"], format!("{h}/reports/4149145")),
-        (vec!["me"], format!("{h}/me")),
+        (vec!["raw", "/v1/hackers/me"], format!("{h}/me")),
         (vec!["hacktivity", "--limit", "5"], format!("{h}/hacktivity?page%5Bsize%5D=5")),
         (
             vec!["hacktivity", "--query", "severity_rating:critical AND disclosed:true", "--sort", "-disclosed_at"],
@@ -103,7 +103,7 @@ fn every_spec_endpoint_text_is_a_hackers_get() {
         assert!(e.starts_with("/v1/hackers") || e.starts_with("<path>"), "{}: {e}", s.name);
         assert!(!s.endpoint.to_ascii_uppercase().contains("POST"));
     }
-    assert_eq!(SPECS.len(), 16);
+    assert_eq!(SPECS.len(), 15);
     for s in SPECS {
         assert!(!s.endpoint.contains("POST") && !s.endpoint.contains("PATCH") && !s.endpoint.contains("DELETE"), "{}", s.name);
     }
@@ -250,7 +250,7 @@ fn flag_validation() {
         vec!["programs", "get", "dyson", "--limit", "2"], // not paginated
         vec!["programs", "get", "dyson", "--page", "2"],
         vec!["programs", "scopes", "dyson", "--bounty-only"],
-        vec!["me", "--limit", "1"],
+        vec!["me"],
         vec!["raw", "/v1/hackers/programs", "--limit", "1"],
         vec!["programs", "list", "--query", "x"],
         vec!["programs", "list", "--sort", "-votes"],
@@ -281,9 +281,10 @@ fn discovery_overview_groups_and_details() {
         match plan(&v(&a)).unwrap() {
             Plan::Text(t) => {
                 assert_eq!(t, OVERVIEW);
-                for w in ["programs", "reports", "payments", "intents", "hacktivity", "me", "raw", "--json", "--dry-run", "--help", "/v1/hackers"] {
+                for w in ["programs", "reports", "payments", "intents", "hacktivity", "raw", "--json", "--dry-run", "--help", "/v1/hackers"] {
                     assert!(t.contains(w), "{w}");
                 }
+                assert!(t.lines().all(|l| !l.trim_start().starts_with("me ")), "{t}");
                 assert!(t.lines().count() <= 24, "overview must stay compact");
             }
             _ => panic!(),
@@ -308,8 +309,6 @@ fn discovery_overview_groups_and_details() {
         (vec!["intents", "attachments", "--help"], "GET /v1/hackers/report_intents/<id>/attachments"),
         (vec!["hacktivity", "--help"], "queryString"),
         (vec!["programs", "scopes", "--help"], "filter[id__gt]"),
-        (vec!["me", "--help"], "GET /v1/hackers/me"),
-        (vec!["help", "me"], "may 401"),
         (vec!["programs", "list", "--help"], "client-side"),
         (vec!["raw", "--help"], "GET <path>"),
     ] {
@@ -426,15 +425,17 @@ fn reports_list_columns_and_get_kv_view() {
 
 #[test]
 fn report_get_prints_included_activities_and_does_not_fetch_files() {
-    let one = r#"{"data":{"id":"7","type":"report","attributes":{"title":"T","vulnerability_information":"body"},"relationships":{"program":{"data":{"attributes":{"handle":"dyson"}}},"activities":{"data":[{"type":"activity-comment","attributes":{"message":"hello there","created_at":"2026-01-02T00:00:00.000Z"},"relationships":{"actor":{"data":{"attributes":{"username":"triage"}}},"attachments":{"data":[{"attributes":{"expiring_url":"https://attachments.example/secret"}}]}}}]}}}}"#;
+    let one = r#"{"data":{"id":"7","type":"report","attributes":{"title":"T","vulnerability_information":"body"},"relationships":{"program":{"data":{"attributes":{"handle":"dyson"}}},"activities":{"data":[{"type":"activity-comment","attributes":{"message":"hello there","created_at":"2026-01-02T00:00:00.000Z"},"relationships":{"actor":{"data":{"attributes":{"username":"triage"}}},"attachments":{"data":[{"id":"9","type":"attachment","attributes":{"file_name":"shot.png","content_type":"image/png","file_size":12,"expiring_url":"https://attachments.example/secret"}}]}}}]}}}}"#;
     let f = Fake::ok(one);
     let (code, out, err) = run(&["reports", "get", "7"], &f);
     assert_eq!(code, 0);
     assert!(out.contains("title\tT\n"), "{out}");
     assert!(out.contains("created_at\ttype\tactor\tmessage\n"), "{out}");
     assert!(out.contains("2026-01-02T00:00:00.000Z\tactivity-comment\ttriage\thello there\n"), "{out}");
-    assert!(!out.contains("attachments.example") && !out.contains("expiring_url"), "{out}");
-    assert!(err.contains("activities: 1 (attachment files are not downloaded)"), "{err}");
+    assert!(out.contains("id\tfile_name\tcontent_type\tfile_size\texpiring_url\n"), "{out}");
+    assert!(out.contains("9\tshot.png\timage/png\t12\thttps://attachments.example/secret\n"), "{out}");
+    assert!(err.contains("activities: 1"), "{err}");
+    assert!(err.contains("attachments: 1 (not downloaded)"), "{err}");
     assert!(err.contains("relationships omitted: program"), "{err}");
     assert!(!err.contains("activities,") && !err.contains("omitted: activities"), "{err}");
     assert_eq!(f.calls(), 1);
@@ -442,16 +443,15 @@ fn report_get_prints_included_activities_and_does_not_fetch_files() {
 }
 
 #[test]
-fn intent_reads_stay_on_the_collection_and_hide_file_urls_until_json() {
+fn intent_attachment_metadata_includes_the_url_without_fetching_it() {
     let body = r#"{"data":[{"id":"9","type":"attachment","attributes":{"expiring_url":"https://hackerone.com/url/to/attachment","created_at":"2025-09-25T13:01:28.293Z","file_name":"a.png","content_type":"image/png","file_size":12}}]}"#;
     let f = Fake::ok(body);
     let (code, out, err) = run(&["intents", "attachments", "23"], &f);
     assert_eq!(code, 0);
     assert_eq!(
         out,
-        "id\tfile_name\tcontent_type\tfile_size\tcreated_at\n9\ta.png\timage/png\t12\t2025-09-25T13:01:28.293Z\n"
+        "id\tfile_name\tcontent_type\tfile_size\tcreated_at\texpiring_url\n9\ta.png\timage/png\t12\t2025-09-25T13:01:28.293Z\thttps://hackerone.com/url/to/attachment\n"
     );
-    assert!(!out.contains("expiring_url") && !out.contains("https://hackerone.com/url"));
     assert!(err.contains("1 rows"), "{err}");
     assert_eq!(f.calls.borrow()[0], "https://api.hackerone.com/v1/hackers/report_intents/23/attachments");
     let (_, json, _) = run(&["intents", "attachments", "23", "--json"], &Fake::ok(body));
@@ -511,6 +511,20 @@ fn json_mode_round_trips_full_response() {
 }
 
 #[test]
+fn empty_lists_keep_documented_headers() {
+    let empty = r#"{"data":[],"links":{}}"#;
+    let (c, out, _) = run(&["programs", "exclusions", "dyson"], &Fake::ok(empty));
+    assert_eq!(c, 0);
+    assert_eq!(out, "id\tcategory\tdetails\tcreated_at\tupdated_at\n");
+    let (_, out, _) = run(&["payments", "earnings"], &Fake::ok(empty));
+    assert_eq!(out, "id\ttype\tamount\tcreated_at\tprogram\n");
+    let (_, out, _) = run(&["payments", "payouts"], &Fake::ok(empty));
+    assert_eq!(out, "amount\tpaid_out_at\tstatus\tpayout_provider\treference\n");
+    let payout = r#"{"data":[{"amount":100,"paid_out_at":"2016-02-02T04:05:06.000Z","reference":"ref","payout_provider":"PayPal","status":"sent"}],"links":{}}"#;
+    let (_, out, _) = run(&["payments", "payouts"], &Fake::ok(payout));
+    assert!(out.contains("100\t2016-02-02T04:05:06.000Z\tsent\tPayPal\tref\n"), "{out}");
+}
+
 fn raw_subcommand_prints_pretty_json_and_next_hint() {
     let (code, out, err) = run(&["raw", "/v1/hackers/programs", "page[size]=2"], &Fake::ok(PROGRAMS));
     assert_eq!(code, 0);
@@ -520,17 +534,14 @@ fn raw_subcommand_prints_pretty_json_and_next_hint() {
 
 // ---------- errors ----------
 #[test]
-fn http_error_is_error_prefixed_nonzero_and_me_note() {
+fn http_error_is_error_prefixed_and_nonzero() {
     let f = Fake { calls: RefCell::new(vec![]), status: 401, body: r#"{"errors":[{"status":401,"detail":"nope"}]}"#.into() };
-    let (code, out, err) = run(&["me"], &f);
+    let (code, out, err) = run(&["programs", "get", "dyson"], &f);
     assert_eq!(code, 1);
     assert!(out.is_empty());
     assert!(err.starts_with("error: HTTP 401: "), "{err}");
-    assert!(err.contains("may 401"));
     assert_eq!(f.calls(), 1);
-    let (c2, _, e2) = run(&["programs", "get", "dyson"], &Fake { calls: RefCell::new(vec![]), status: 404, body: r#"{"errors":[]}"#.into() });
-    assert_eq!(c2, 1);
-    assert!(e2.starts_with("error: HTTP 404:") && !e2.contains("may 401"));
+    assert!(plan(&v(&["me"])).is_err());
 }
 
 #[test]
@@ -577,7 +588,6 @@ fn dry_run_every_subcommand_no_network_no_token() {
         vec!["programs", "exclusions", "dyson"],
         vec!["reports", "list"],
         vec!["reports", "get", "1"],
-        vec!["me"],
         vec!["hacktivity", "--query", "team:gitlab", "--sort", "-votes"],
         vec!["payments", "balance"],
         vec!["intents", "list"],
