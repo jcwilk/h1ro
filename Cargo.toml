@@ -1,0 +1,30 @@
+[package]
+name = "h1ro"
+version = "0.2.0"
+edition = "2021"
+rust-version = "1.85"
+description = "Read-only (GET-only) HackerOne Hacker API client"
+publish = false
+
+[lib]
+name = "h1ro"
+path = "src/lib.rs"
+
+[[bin]]
+name = "h1ro"
+path = "src/main.rs"
+
+[dependencies]
+# Blocking, small, well known. HTTP verb is chosen only in src/http.rs, which
+# calls Agent::get and nothing else (enforced by a source-scan unit test).
+ureq = { version = "2", default-features = false, features = ["tls"] }
+regex = { version = "1", default-features = false, features = ["std", "perf"] }
+base64 = "0.22"
+serde_json = { version = "1", features = ["preserve_order"] }
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
+codegen-units = 1
+panic = "abort"
